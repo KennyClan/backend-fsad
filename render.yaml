@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: floorplan-furniture-detect
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: MODEL_PATH
+        value: best.onnx
+      - key: CONF_THRESHOLD
+        value: "0.35"
+      - key: IOU_THRESHOLD
+        value: "0.45"
+      - key: ALLOWED_ORIGINS
+        value: "*"

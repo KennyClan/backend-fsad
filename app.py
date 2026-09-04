@@ -1,131 +1,221 @@
-"""
-FloorPlan Studio — Furniture Detection Inference API
------------------------------------------------------
-Loads a YOLO11n model (best.pt) once at startup and exposes:
-  GET  /health   -> simple liveness check
-  POST /predict  -> accepts an image file, returns JSON detections
-
-Environment variables:
-  MODEL_PATH        Local path to the model file (default: best.pt)
-  MODEL_URL         Optional direct-download URL to fetch the model from
-                     if it isn't already present at MODEL_PATH
-                     (e.g. a Google Drive "uc?export=download&id=..." link,
-                     or a Hugging Face / S3 / GitHub Release URL)
-  CONF_THRESHOLD    Confidence threshold, default 0.25
-  ALLOWED_ORIGINS   Comma-separated list of allowed origins for CORS,
-                     e.g. "https://your-app.vercel.app,http://localhost:3000"
-                     Defaults to "*" (open) if not set.
-"""
-
-import os
+import base64
 import io
-import logging
-from contextlib import asynccontextmanager
+import json
+import os
 
-import requests
-from fastapi import FastAPI, File, UploadFile, HTTPException
+import numpy as np
+import onnxruntime as ort
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from PIL import Image
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("floorplan-inference")
+MODEL_PATH = os.environ.get("MODEL_PATH", "best.onnx")
+CONF_THRESHOLD = float(os.environ.get("CONF_THRESHOLD", "0.35"))
+IOU_THRESHOLD = float(os.environ.get("IOU_THRESHOLD", "0.45"))
+INPUT_SIZE = int(os.environ.get("INPUT_SIZE", "640"))
+ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",")]
 
-MODEL_PATH = os.environ.get("MODEL_PATH", "best.pt")
-MODEL_URL = os.environ.get("MODEL_URL")
-CONF_THRESHOLD = float(os.environ.get("CONF_THRESHOLD", "0.25"))
-ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*")
+CLASS_NAMES = os.environ.get("CLASS_NAMES", "").split(",") if os.environ.get("CLASS_NAMES") else None
 
-model_holder = {"model": None}
+_DEFAULT_CLASS_MAP = {
+    "sofa": "sofa_3",
+    "couch": "sofa_3",
+    "loveseat": "sofa_2",
+    "sofa 2 seat": "sofa_2",
+    "sofa 3 seat": "sofa_3",
+    "sofa2": "sofa_2",
+    "sofa_2": "sofa_2",
+    "sofa3": "sofa_3",
+    "sofa_3": "sofa_3",
+    "chair": "chair",
+    "dining chair": "chair",
+    "armchair": "armchair",
+    "lounge chair": "armchair",
+    "table": "table_rect",
+    "dining table": "table_rect",
+    "round table": "table_round",
+    "coffee table": "coffee",
+    "desk": "desk",
+    "bed": "bed_d",
+    "single bed": "bed_s",
+    "double bed": "bed_d",
+    "king bed": "bed_k",
+    "toilet": "toilet",
+    "sink": "sink",
+    "bathtub": "bathtub",
+    "tub": "bathtub",
+    "plant": "plant",
+    "houseplant": "plant",
+    "potted_plant": "plant",
+    "potted plant": "plant",
+    "tv": "tv",
+    "television": "tv",
+    "tvmonitor": "tv",
+    "monitor": "tv",
+    "bookshelf": "shelf",
+    "bookcase": "shelf",
+    "shelf": "shelf",
+    "cabinet": "cabinet",
+    "wall cabinet": "wall_cab",
+    "wardrobe": "wardrobe",
+    "closet": "wardrobe",
+    "door": "door",
+    "window": "window",
+    "rug": "rug",
+    "carpet": "rug",
+}
 
 
-def download_model_if_needed():
-    if os.path.exists(MODEL_PATH):
-        logger.info(f"Model already present at {MODEL_PATH}")
-        return
-    if not MODEL_URL:
-        raise RuntimeError(
-            f"Model not found at {MODEL_PATH} and MODEL_URL is not set. "
-            "Either bake best.pt into the image/repo, or set MODEL_URL "
-            "to a direct-download link."
-        )
-    logger.info(f"Downloading model from MODEL_URL to {MODEL_PATH} ...")
-    response = requests.get(MODEL_URL, stream=True, timeout=120)
-    response.raise_for_status()
-    with open(MODEL_PATH, "wb") as f:
-        for chunk in response.iter_content(chunk_size=8192):
-            f.write(chunk)
-    logger.info("Model download complete.")
+def _load_class_map():
+    env_map = os.environ.get("CLASS_MAP", "")
+    if env_map:
+        try:
+            return {k.lower(): v for k, v in json.loads(env_map).items()}
+        except json.JSONDecodeError:
+            pass
+    return dict(_DEFAULT_CLASS_MAP)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Import here so the module import itself is cheap (helps cold starts
-    # on platforms that inspect the app before fully starting it).
-    from ultralytics import YOLO
+CLASS_MAP = _load_class_map()
 
-    download_model_if_needed()
-    logger.info("Loading YOLO11n model ...")
-    model_holder["model"] = YOLO(MODEL_PATH)
-    logger.info("Model loaded. Ready to serve predictions.")
-    yield
-    model_holder["model"] = None
-
-
-app = FastAPI(title="FloorPlan Studio Inference API", lifespan=lifespan)
+app = FastAPI(title="FloorPlan Studio - furniture detection (ONNX)")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in ALLOWED_ORIGINS.split(",")],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )
 
-
-@app.get("/health")
-def health():
-    return {"status": "ok", "model_loaded": model_holder["model"] is not None}
+session = ort.InferenceSession(MODEL_PATH, providers=["CPUExecutionProvider"])
+input_name = session.get_inputs()[0].name
 
 
-@app.post("/predict")
-async def predict(file: UploadFile = File(...)):
-    model = model_holder["model"]
-    if model is None:
-        raise HTTPException(status_code=503, detail="Model is not loaded yet")
+def letterbox(img: Image.Image, size: int):
+    w, h = img.size
+    scale = min(size / w, size / h)
+    nw, nh = int(round(w * scale)), int(round(h * scale))
+    resized = img.resize((nw, nh), Image.BILINEAR)
+    canvas = Image.new("RGB", (size, size), (114, 114, 114))
+    pad_x, pad_y = (size - nw) // 2, (size - nh) // 2
+    canvas.paste(resized, (pad_x, pad_y))
+    return canvas, scale, pad_x, pad_y
 
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Uploaded file must be an image")
 
+def nms(boxes, scores, iou_threshold):
+    if len(boxes) == 0:
+        return []
+    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+    areas = (x2 - x1) * (y2 - y1)
+    order = scores.argsort()[::-1]
+    keep = []
+    while order.size > 0:
+        i = order[0]
+        keep.append(int(i))
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
+        w = np.maximum(0.0, xx2 - xx1)
+        h = np.maximum(0.0, yy2 - yy1)
+        inter = w * h
+        iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-9)
+        order = order[1:][iou <= iou_threshold]
+    return keep
+
+
+def _run_detection(image_b64: str):
     try:
-        contents = await file.read()
-        image = Image.open(io.BytesIO(contents)).convert("RGB")
+        image_bytes = base64.b64decode(image_b64)
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     except Exception:
-        raise HTTPException(status_code=400, detail="Could not read uploaded image")
+        raise HTTPException(status_code=400, detail="Could not decode image.")
 
-    results = model.predict(image, conf=CONF_THRESHOLD, verbose=False)
-    result = results[0]
+    orig_w, orig_h = img.size
+    canvas, scale, pad_x, pad_y = letterbox(img, INPUT_SIZE)
 
-    detections = []
-    for box in result.boxes:
-        cls_id = int(box.cls[0])
-        label = result.names.get(cls_id, str(cls_id))
-        confidence = float(box.conf[0])
-        x1, y1, x2, y2 = [float(v) for v in box.xyxy[0]]
-        detections.append({
-            "label": label,
-            "confidence": round(confidence, 4),
-            "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
-        })
+    arr = np.asarray(canvas, dtype=np.float32) / 255.0
+    arr = arr.transpose(2, 0, 1)[None, :, :, :]
 
-    return JSONResponse({
-        "count": len(detections),
-        "image_size": {"width": image.width, "height": image.height},
-        "detections": detections,
-    })
+    outputs = session.run(None, {input_name: arr})
+    pred = outputs[0]
+    if pred.shape[1] < pred.shape[2]:
+        pred = pred[0].T
+    else:
+        pred = pred[0]
+
+    boxes_xywh = pred[:, :4]
+    class_scores = pred[:, 4:]
+    class_ids = np.argmax(class_scores, axis=1)
+    confidences = class_scores[np.arange(len(class_scores)), class_ids]
+
+    mask = confidences >= CONF_THRESHOLD
+    boxes_xywh, class_ids, confidences = boxes_xywh[mask], class_ids[mask], confidences[mask]
+
+    predictions = []
+    unmapped = set()
+
+    if len(boxes_xywh) > 0:
+        cx, cy, w, h = boxes_xywh[:, 0], boxes_xywh[:, 1], boxes_xywh[:, 2], boxes_xywh[:, 3]
+        x1, y1, x2, y2 = cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2
+        boxes_x1y1x2y2 = np.stack([x1, y1, x2, y2], axis=1)
+
+        keep = nms(boxes_x1y1x2y2, confidences, IOU_THRESHOLD)
+
+        for i in keep:
+            bcx = (cx[i] - pad_x) / scale
+            bcy = (cy[i] - pad_y) / scale
+            bw = w[i] / scale
+            bh = h[i] / scale
+            cls_id = int(class_ids[i])
+
+            if CLASS_NAMES and cls_id < len(CLASS_NAMES):
+                cls_name = CLASS_NAMES[cls_id]
+            else:
+                cls_name = str(cls_id)
+
+            cls_lower = cls_name.lower().strip()
+            furniture_id = CLASS_MAP.get(cls_lower)
+
+            if furniture_id:
+                predictions.append({
+                    "furnitureId": furniture_id,
+                    "class": cls_name,
+                    "confidence": float(confidences[i]),
+                    "x": float(bcx),
+                    "y": float(bcy),
+                    "width": float(bw),
+                    "height": float(bh),
+                })
+            else:
+                unmapped.add(cls_name)
+
+    return {
+        "detections": predictions,
+        "imageWidth": orig_w,
+        "imageHeight": orig_h,
+        "unmappedClasses": sorted(unmapped),
+    }
 
 
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", "8000"))
-    uvicorn.run("app:app", host="0.0.0.0", port=port)
+@app.get("/")
+def health():
+    return {"status": "ok", "model": MODEL_PATH, "runtime": "onnxruntime"}
+
+
+@app.post("/api/detect-furniture")
+async def detect_furniture(request: Request):
+    body = await request.json()
+    image_b64 = body.get("image")
+    if not image_b64 or not isinstance(image_b64, str):
+        raise HTTPException(status_code=400, detail='Missing "image" (base64 string) in the request body.')
+    return _run_detection(image_b64)
+
+
+@app.post("/detect")
+async def detect(request: Request):
+    body = await request.json()
+    image_b64 = body.get("image")
+    if not image_b64 or not isinstance(image_b64, str):
+        raise HTTPException(status_code=400, detail='Missing "image" (base64 string) in the request body.')
+    return _run_detection(image_b64)
