@@ -6,10 +6,12 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: MODEL_PATH
-        value: best.onnx
+      - key: ROBOFLOW_API_KEY
+        sync: false
+      - key: ROBOFLOW_MODEL_ID
+        sync: false
       - key: CONF_THRESHOLD
-        value: "0.35"
+        value: "0.5"
       - key: IOU_THRESHOLD
         value: "0.45"
       - key: ALLOWED_ORIGINS

@@ -3,19 +3,22 @@ import io
 import json
 import os
 
-import numpy as np
-import onnxruntime as ort
+import requests as http_requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 
-MODEL_PATH = os.environ.get("MODEL_PATH", "best.onnx")
-CONF_THRESHOLD = float(os.environ.get("CONF_THRESHOLD", "0.35"))
+ROBOFLOW_API_KEY = os.environ.get("ROBOFLOW_API_KEY")
+ROBOFLOW_MODEL_ID = os.environ.get("ROBOFLOW_MODEL_ID")
+ROBOFLOW_API_URL = os.environ.get("ROBOFLOW_API_URL", "https://detect.roboflow.com")
+CONF_THRESHOLD = float(os.environ.get("CONF_THRESHOLD", "0.5"))
 IOU_THRESHOLD = float(os.environ.get("IOU_THRESHOLD", "0.45"))
-INPUT_SIZE = int(os.environ.get("INPUT_SIZE", "640"))
 ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",")]
 
-CLASS_NAMES = os.environ.get("CLASS_NAMES", "").split(",") if os.environ.get("CLASS_NAMES") else None
+if not ROBOFLOW_API_KEY:
+    raise RuntimeError("ROBOFLOW_API_KEY environment variable is required but not set.")
+if not ROBOFLOW_MODEL_ID:
+    raise RuntimeError("ROBOFLOW_MODEL_ID environment variable is required but not set.")
 
 _DEFAULT_CLASS_MAP = {
     "sofa": "sofa_3",
@@ -31,12 +34,16 @@ _DEFAULT_CLASS_MAP = {
     "dining chair": "chair",
     "armchair": "armchair",
     "lounge chair": "armchair",
+    "swivel_c": "chair",
     "table": "table_rect",
     "dining table": "table_rect",
+    "dining-table": "table_rect",
+    "dinning-table": "table_rect",
     "round table": "table_round",
     "coffee table": "coffee",
     "desk": "desk",
     "bed": "bed_d",
+    "master bed": "bed_d",
     "single bed": "bed_s",
     "double bed": "bed_d",
     "king bed": "bed_k",
@@ -52,6 +59,7 @@ _DEFAULT_CLASS_MAP = {
     "television": "tv",
     "tvmonitor": "tv",
     "monitor": "tv",
+    "computer": "tv",
     "bookshelf": "shelf",
     "bookcase": "shelf",
     "shelf": "shelf",
@@ -59,10 +67,24 @@ _DEFAULT_CLASS_MAP = {
     "wall cabinet": "wall_cab",
     "wardrobe": "wardrobe",
     "closet": "wardrobe",
+    "transparent closet": "wardrobe",
+    "cupboard": "cabinet",
+    "sideboard": "cabinet",
+    "drawer near bed": "cabinet",
+    "nightstand": "cabinet",
     "door": "door",
     "window": "window",
+    "windows": "window",
     "rug": "rug",
     "carpet": "rug",
+    "wall": "wall",
+    "curtains": "wall_cab",
+    "ceiling fan": "wall_cab",
+    "air conditioner": "wall_cab",
+    "lamp": "tv",
+    "frame": "shelf",
+    "photoframe": "shelf",
+    "sofa": "sofa_3",
 }
 
 
@@ -78,7 +100,7 @@ def _load_class_map():
 
 CLASS_MAP = _load_class_map()
 
-app = FastAPI(title="FloorPlan Studio - furniture detection (ONNX)")
+app = FastAPI(title="FloorPlan Studio - furniture detection (Roboflow Hosted API)")
 
 app.add_middleware(
     CORSMiddleware,
@@ -86,42 +108,6 @@ app.add_middleware(
     allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )
-
-session = ort.InferenceSession(MODEL_PATH, providers=["CPUExecutionProvider"])
-input_name = session.get_inputs()[0].name
-
-
-def letterbox(img: Image.Image, size: int):
-    w, h = img.size
-    scale = min(size / w, size / h)
-    nw, nh = int(round(w * scale)), int(round(h * scale))
-    resized = img.resize((nw, nh), Image.BILINEAR)
-    canvas = Image.new("RGB", (size, size), (114, 114, 114))
-    pad_x, pad_y = (size - nw) // 2, (size - nh) // 2
-    canvas.paste(resized, (pad_x, pad_y))
-    return canvas, scale, pad_x, pad_y
-
-
-def nms(boxes, scores, iou_threshold):
-    if len(boxes) == 0:
-        return []
-    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
-    areas = (x2 - x1) * (y2 - y1)
-    order = scores.argsort()[::-1]
-    keep = []
-    while order.size > 0:
-        i = order[0]
-        keep.append(int(i))
-        xx1 = np.maximum(x1[i], x1[order[1:]])
-        yy1 = np.maximum(y1[i], y1[order[1:]])
-        xx2 = np.minimum(x2[i], x2[order[1:]])
-        yy2 = np.minimum(y2[i], y2[order[1:]])
-        w = np.maximum(0.0, xx2 - xx1)
-        h = np.maximum(0.0, yy2 - yy1)
-        inter = w * h
-        iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-9)
-        order = order[1:][iou <= iou_threshold]
-    return keep
 
 
 def _run_detection(image_b64: str):
@@ -132,66 +118,75 @@ def _run_detection(image_b64: str):
         raise HTTPException(status_code=400, detail="Could not decode image.")
 
     orig_w, orig_h = img.size
-    canvas, scale, pad_x, pad_y = letterbox(img, INPUT_SIZE)
 
-    arr = np.asarray(canvas, dtype=np.float32) / 255.0
-    arr = arr.transpose(2, 0, 1)[None, :, :, :]
+    conf_pct = int(CONF_THRESHOLD * 100)
+    overlap_pct = int(IOU_THRESHOLD * 100)
 
-    outputs = session.run(None, {input_name: arr})
-    pred = outputs[0]
-    if pred.shape[1] < pred.shape[2]:
-        pred = pred[0].T
-    else:
-        pred = pred[0]
+    url = f"{ROBOFLOW_API_URL}/{ROBOFLOW_MODEL_ID}"
+    params = {
+        "api_key": ROBOFLOW_API_KEY,
+        "confidence": conf_pct,
+        "overlap": overlap_pct,
+    }
 
-    boxes_xywh = pred[:, :4]
-    class_scores = pred[:, 4:]
-    class_ids = np.argmax(class_scores, axis=1)
-    confidences = class_scores[np.arange(len(class_scores)), class_ids]
+    try:
+        resp = http_requests.post(
+            url,
+            params=params,
+            data=image_bytes,
+            headers={"Content-Type": "application/octet-stream"},
+            timeout=30,
+        )
+    except http_requests.Timeout:
+        raise HTTPException(status_code=502, detail="Roboflow API request timed out.")
+    except http_requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Roboflow API request failed: {exc}")
 
-    mask = confidences >= CONF_THRESHOLD
-    boxes_xywh, class_ids, confidences = boxes_xywh[mask], class_ids[mask], confidences[mask]
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Roboflow API returned status {resp.status_code}: {resp.text}",
+        )
+
+    try:
+        result = resp.json()
+    except ValueError:
+        raise HTTPException(status_code=502, detail="Roboflow API returned invalid JSON.")
 
     predictions = []
     unmapped = set()
 
-    if len(boxes_xywh) > 0:
-        cx, cy, w, h = boxes_xywh[:, 0], boxes_xywh[:, 1], boxes_xywh[:, 2], boxes_xywh[:, 3]
-        x1, y1, x2, y2 = cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2
-        boxes_x1y1x2y2 = np.stack([x1, y1, x2, y2], axis=1)
+    for pred in result.get("predictions", []):
+        cls_name = pred.get("class", "")
+        cls_lower = cls_name.lower().strip()
+        furniture_id = CLASS_MAP.get(cls_lower)
 
-        keep = nms(boxes_x1y1x2y2, confidences, IOU_THRESHOLD)
-
-        for i in keep:
-            bcx = (cx[i] - pad_x) / scale
-            bcy = (cy[i] - pad_y) / scale
-            bw = w[i] / scale
-            bh = h[i] / scale
-            cls_id = int(class_ids[i])
-
-            if CLASS_NAMES and cls_id < len(CLASS_NAMES):
-                cls_name = CLASS_NAMES[cls_id]
-            else:
-                cls_name = str(cls_id)
-
-            cls_lower = cls_name.lower().strip()
-            furniture_id = CLASS_MAP.get(cls_lower)
-
-            if furniture_id:
-                predictions.append({
-                    "furnitureId": furniture_id,
-                    "class": cls_name,
-                    "confidence": float(confidences[i]),
-                    "x": float(bcx),
-                    "y": float(bcy),
-                    "width": float(bw),
-                    "height": float(bh),
-                })
-            else:
-                unmapped.add(cls_name)
+        if furniture_id:
+            predictions.append({
+                "furnitureId": furniture_id,
+                "class": cls_name,
+                "confidence": float(pred.get("confidence", 0)),
+                "x": float(pred.get("x", 0)),
+                "y": float(pred.get("y", 0)),
+                "width": float(pred.get("width", 0)),
+                "height": float(pred.get("height", 0)),
+            })
+        else:
+            unmapped.add(cls_name)
 
     return {
         "detections": predictions,
+        "predictions": [
+            {
+                "class": p["class"],
+                "confidence": p["confidence"],
+                "x": p["x"],
+                "y": p["y"],
+                "width": p["width"],
+                "height": p["height"],
+            }
+            for p in predictions
+        ],
         "imageWidth": orig_w,
         "imageHeight": orig_h,
         "unmappedClasses": sorted(unmapped),
@@ -200,7 +195,7 @@ def _run_detection(image_b64: str):
 
 @app.get("/")
 def health():
-    return {"status": "ok", "model": MODEL_PATH, "runtime": "onnxruntime"}
+    return {"status": "ok", "model": ROBOFLOW_MODEL_ID, "runtime": "roboflow-hosted-api"}
 
 
 @app.post("/api/detect-furniture")
