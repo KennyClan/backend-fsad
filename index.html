@@ -188,6 +188,28 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .modal-ok.loading .btn-label { opacity: 0; }
 .modal-wide { width: 520px; }
 
+/* Room Style Panel */
+.rsp-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 1000; opacity: 0; visibility: hidden; transition: opacity var(--transition-base), visibility var(--transition-base); }
+.rsp-overlay.open { opacity: 1; visibility: visible; }
+.rsp-card { background: var(--color-surface); border: 1px solid var(--color-border-light); border-radius: 12px; padding: 24px; width: 560px; max-width: 94vw; max-height: 90vh; overflow-y: auto; box-shadow: var(--shadow-xl); }
+.rsp-title { font-family: var(--font-display); font-size: 20px; color: var(--color-primary); margin-bottom: 6px; }
+.rsp-sub { font-size: 13px; color: var(--color-text-muted); margin-bottom: 18px; line-height: 1.6; }
+.rsp-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 16px; }
+@media (min-width: 600px) { .rsp-grid { grid-template-columns: repeat(4, 1fr); } }
+.rsp-card-btn { border: 2px solid transparent; border-radius: 8px; padding: 12px 10px; background: var(--color-surface); cursor: pointer; font-family: var(--font-body); text-align: left; transition: border-color var(--transition-fast), background var(--transition-fast); }
+.rsp-card-btn:hover { border-color: var(--color-border); background: var(--color-surface-hover); }
+.rsp-card-btn.selected { border-color: var(--color-primary); background: var(--color-accent-light); }
+.rsp-emoji { font-size: 24px; display: block; margin-bottom: 6px; }
+.rsp-name { font-size: 13px; font-weight: 600; color: var(--color-text); display: block; margin-bottom: 2px; }
+.rsp-desc { font-size: 11px; color: var(--color-text-muted); line-height: 1.4; display: block; }
+.rsp-field { margin: 14px 0; }
+.rsp-label { font-size: 11px; font-weight: 600; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .05em; display: block; margin-bottom: 6px; }
+.rsp-input { width: 100%; padding: 10px 14px; border: 1.5px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg); color: var(--color-text); font-family: var(--font-body); font-size: 14px; outline: none; transition: border-color var(--transition-fast), box-shadow var(--transition-fast); }
+.rsp-input:focus { border-color: var(--color-border-focus); box-shadow: 0 0 0 3px rgba(140,96,64,.12); }
+.rsp-loading { display: none; align-items: center; justify-content: center; gap: 10px; margin-top: 14px; padding: 12px; background: var(--color-info-bg); border: 1px solid var(--color-info); border-radius: var(--radius-md); color: var(--color-info); font-size: 13px; font-weight: 500; }
+.rsp-loading.open { display: flex; }
+.rsp-loading .rsp-spinner { width: 16px; height: 16px; border: 2px solid rgba(58,106,140,.25); border-top-color: var(--color-info); border-radius: 50%; animation: spin .6s linear infinite; }
+
 /* Photo Upload */
 .photo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 18px 0; }
 .photo-slot { border: 2px dashed var(--color-border); border-radius: var(--radius-md); min-height: 100px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; cursor: pointer; font-size: 12px; color: var(--color-text-muted); transition: all var(--transition-base); padding: 14px; position: relative; overflow: hidden; }
@@ -973,6 +995,33 @@ canvas { display: block; }
   </div>
 </div>
 
+<!-- ROOM STYLE PANEL -->
+<div class="rsp-overlay" id="room-style-panel" role="dialog" aria-modal="true" aria-labelledby="room-style-title">
+  <div class="rsp-card">
+    <div class="rsp-title" id="room-style-title">Choose Your Room Style</div>
+    <div class="rsp-sub">Select a room type and aesthetic for the best layout suggestion</div>
+    <div class="rsp-grid">
+      <button class="rsp-card-btn" data-type="living room" onclick="selectRoomType('living room',this)"><span class="rsp-emoji">&#x1F6CB;</span><span class="rsp-name">Living Room</span><span class="rsp-desc">Sofa-centered, open flow layout</span></button>
+      <button class="rsp-card-btn" data-type="bedroom" onclick="selectRoomType('bedroom',this)"><span class="rsp-emoji">&#x1F6CF;</span><span class="rsp-name">Bedroom</span><span class="rsp-desc">Restful, wall-anchored arrangement</span></button>
+      <button class="rsp-card-btn" data-type="dining room" onclick="selectRoomType('dining room',this)"><span class="rsp-emoji">&#x1F37D;&#xFE0F;</span><span class="rsp-name">Dining Room</span><span class="rsp-desc">Table-centered, social space</span></button>
+      <button class="rsp-card-btn" data-type="home office" onclick="selectRoomType('home office',this)"><span class="rsp-emoji">&#x1F4BB;</span><span class="rsp-name">Home Office</span><span class="rsp-desc">Desk-forward, productive setup</span></button>
+      <button class="rsp-card-btn" data-type="kitchen" onclick="selectRoomType('kitchen',this)"><span class="rsp-emoji">&#x1F373;</span><span class="rsp-name">Kitchen</span><span class="rsp-desc">Cabinet-hugging, functional layout</span></button>
+      <button class="rsp-card-btn" data-type="wheelchair friendly" onclick="selectRoomType('wheelchair friendly',this)"><span class="rsp-emoji">&#x267F;</span><span class="rsp-name">Wheelchair</span><span class="rsp-desc">1.2m+ clearances, fully accessible</span></button>
+      <button class="rsp-card-btn" data-type="elderly friendly" onclick="selectRoomType('elderly friendly',this)"><span class="rsp-emoji">&#x1F9D3;</span><span class="rsp-name">Elderly Friendly</span><span class="rsp-desc">Safe pathways, clutter-free</span></button>
+      <button class="rsp-card-btn" data-type="studio apartment" onclick="selectRoomType('studio apartment',this)"><span class="rsp-emoji">&#x1F3E0;</span><span class="rsp-name">Studio Apartment</span><span class="rsp-desc">Zoned multi-use layout</span></button>
+    </div>
+    <div class="rsp-field">
+      <label class="rsp-label" for="room-aesthetic-input">Room Aesthetic (optional)</label>
+      <input class="rsp-input" type="text" id="room-aesthetic-input" placeholder="e.g. modern minimalist, bohemian, scandinavian">
+    </div>
+    <div class="modal-actions">
+      <button class="modal-cancel" id="skip-layout-btn" onclick="skipLayout()">Skip &mdash; Place Manually</button>
+      <button class="modal-ok" id="suggest-layout-btn" onclick="suggestLayout()">&#x2728; Suggest Layout</button>
+    </div>
+    <div class="rsp-loading" id="suggest-loading"><div class="rsp-spinner"></div><span>Generating your layout...</span></div>
+  </div>
+</div>
+
 <!-- EDITOR -->
 <div id="screen-editor" class="screen">
   <div class="editor-wrap">
@@ -1094,6 +1143,10 @@ let canvasW=0,canvasH=0;
 let editorView='2d';
 let roomPhotos=[];
 let pendingDetections=[];
+let selectedRoomType = 'bedroom';
+let selectedRoomStyle = '';
+let verifiedFurniture = [];
+let verifiedPlaced = [];
 let nextId=1;
 const SCALE=40,GRID=0.5;
 const uid=()=>nextId++;
@@ -1414,6 +1467,12 @@ function openModal(id){
 }
 function closeModal(id){document.getElementById(id).classList.remove('open');}
 function selectRoomType(btn,type){
+  if(typeof btn==='string'){
+    selectedRoomType=btn;
+    document.querySelectorAll('#room-style-panel .rsp-card-btn').forEach(b=>{b.classList.remove('selected');});
+    if(type)type.classList.add('selected');
+    return;
+  }
   document.querySelectorAll('.room-type-btn').forEach(b=>{b.classList.remove('active');b.setAttribute('aria-checked','false');});
   btn.classList.add('active');btn.setAttribute('aria-checked','true');
   roomConfig.type=type;
@@ -2310,11 +2369,124 @@ function setVerifyType(id,defId){const d=pendingDetections.find(x=>x.id===id);if
 function cancelVerification(){pendingDetections=[];closeModal('modal-verify');}
 function confirmVerification(){
   let placed=0;
-  pendingDetections.filter(d=>d.include).forEach(d=>{placed+=placeDetectedFurniture({detections:[d],imageWidth:d.imageWidth,imageHeight:d.imageHeight});});
+  const beforeCount=furniture.length;
+  verifiedFurniture=[];
+  pendingDetections.filter(d=>d.include).forEach(d=>{
+    placed+=placeDetectedFurniture({detections:[d],imageWidth:d.imageWidth,imageHeight:d.imageHeight});
+    const def=FURNITURE_DEFS.find(f=>f.id===d.defId);
+    if(def)verifiedFurniture.push({furnitureId:def.id,label:def.label});
+  });
+  verifiedPlaced=furniture.slice(beforeCount);
   pendingDetections=[];
   closeModal('modal-verify');
   draw2d();
   setStatus(`Placed ${placed} confirmed item${placed===1?'':'s'} on the floor plan.`);
+  if(placed>0)showRoomStylePanel();
+}
+
+// ══════════════════════════════════════════
+//  ROOM STYLE PANEL (AI layout suggestion)
+// ══════════════════════════════════════════
+function showRoomStylePanel(){
+  const panel=document.getElementById('room-style-panel');
+  if(!panel)return;
+  document.querySelectorAll('#room-style-panel .rsp-card-btn').forEach(b=>{b.classList.remove('selected');});
+  const defaultCard=document.querySelector('#room-style-panel .rsp-card-btn[data-type="bedroom"]');
+  if(defaultCard)defaultCard.classList.add('selected');
+  selectedRoomType='bedroom';
+  const input=document.getElementById('room-aesthetic-input');
+  if(input)input.value=selectedRoomStyle;
+  panel.classList.add('open');
+}
+function closeRoomStylePanel(){document.getElementById('room-style-panel')?.classList.remove('open');}
+function skipLayout(){
+  closeRoomStylePanel();
+  placeVerifiedDefault();
+  draw2d();
+  setStatus('Manual placement \u2014 drag items to arrange them.');
+}
+function showLayoutToast(msg){
+  const t=document.getElementById('save-toast');
+  if(!t)return;
+  t.textContent=msg;
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2500);
+}
+function placeSuggestionItem(s){
+  const def=FURNITURE_DEFS.find(f=>f.id===s.furnitureId);
+  if(!def)return;
+  const rot=((Number(s.rotation)||0)%360)/180*Math.PI;
+  const seed={
+    x:Math.max(0,Math.min(Number(s.x)||0,roomConfig.w-def.w)),
+    y:Math.max(0,Math.min(Number(s.y)||0,roomConfig.h-def.h)),
+  };
+  const cand=bestNudge(def,furniture,walls,seed);
+  const item={id:uid(),defId:def.id,x:cand.score<100?cand.x:seed.x,y:cand.score<100?cand.y:seed.y,w:def.w,h:def.h,rot,h3d:def.h3d||0.9};
+  furniture.push(item);
+  if((def.id==='door'||def.id==='window'))snapDoorWindow(item);
+  return item;
+}
+function placeVerifiedDefault(){
+  furniture=furniture.filter(f=>verifiedPlaced.indexOf(f)===-1);
+  verifiedPlaced=[];
+  const gridCols=Math.max(1,Math.ceil(Math.sqrt(verifiedFurniture.length||1)));
+  verifiedFurniture.forEach((vf,i)=>{
+    const def=FURNITURE_DEFS.find(f=>f.id===vf.furnitureId);
+    if(!def)return;
+    const col=i%gridCols,row=Math.floor(i/gridCols);
+    const seed={
+      x:Math.min(0.4+(col)*(def.w+0.5),Math.max(0,roomConfig.w-def.w)),
+      y:Math.min(0.4+(row)*(def.h+0.5),Math.max(0,roomConfig.h-def.h)),
+    };
+    const cand=bestNudge(def,furniture,walls,seed);
+    const item={id:uid(),defId:def.id,x:cand.score<100?cand.x:seed.x,y:cand.score<100?cand.y:seed.y,w:def.w,h:def.h,rot:0,h3d:def.h3d||0.9};
+    furniture.push(item);
+    if(def.id==='door'||def.id==='window')snapDoorWindow(item);
+  });
+  sanitizeLayout();
+}
+async function suggestLayout(){
+  const input=document.getElementById('room-aesthetic-input');
+  selectedRoomStyle=(input&&input.value||'').trim();
+  const loading=document.getElementById('suggest-loading');
+  const sugBtn=document.getElementById('suggest-layout-btn');
+  const skipBtn=document.getElementById('skip-layout-btn');
+  if(loading)loading.classList.add('open');
+  if(sugBtn)sugBtn.style.display='none';
+  if(skipBtn)skipBtn.style.display='none';
+  try{
+    const payload={
+      roomType:selectedRoomType,
+      roomWidth:roomConfig.w,
+      roomLength:roomConfig.h,
+      furniture:verifiedFurniture,
+      roomStyle:selectedRoomStyle,
+    };
+    const res=await fetch('/api/suggest-layout',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload),
+    });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok)throw new Error(data.error||`Suggestion request failed (${res.status})`);
+    furniture=furniture.filter(f=>verifiedPlaced.indexOf(f)===-1);
+    verifiedPlaced=[];
+    (data.suggestions||[]).forEach(s=>placeSuggestionItem(s));
+    sanitizeLayout();
+    draw2d();
+    closeRoomStylePanel();
+    showLayoutToast('Layout suggested! Drag to adjust.');
+    setStatus('Layout suggested \u2014 drag to adjust.');
+  }catch(err){
+    alert('Layout suggestion failed, placing manually instead');
+    placeVerifiedDefault();
+    draw2d();
+    closeRoomStylePanel();
+  }finally{
+    if(loading)loading.classList.remove('open');
+    if(sugBtn)sugBtn.style.display='';
+    if(skipBtn)skipBtn.style.display='';
+  }
 }
 
 async function detectFurnitureInImage(file){

@@ -1,8 +1,16 @@
 {
-  "cleanUrls": true,
-  "trailingSlash": false,
-  "outputDirectory": "dist",
   "rewrites": [
-    { "source": "/", "destination": "/index.html" }
+    { 
+      "source": "/api/suggest-layout", 
+      "destination": "/api/suggest-layout.js" 
+    },
+    { 
+      "source": "/api/detect-furniture", 
+      "destination": "/api/detect-furniture.js" 
+    },
+    { 
+      "source": "/(.*)", 
+      "destination": "/index.html" 
+    }
   ]
 }
